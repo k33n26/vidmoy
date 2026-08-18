@@ -1,0 +1,5 @@
+mkdir output
+touch output/.gitkeep
+git add output/.gitkeep
+git commit -m "add output directory"
+git push
