@@ -1,0 +1,36 @@
+name: IMDb Vidmody Auto Scraper
+
+on:
+  schedule:
+    # Her gün gece 00:00'da otomatik çalışır
+    - cron: '0 0 * * *'
+  workflow_dispatch: # GitHub arayüzünden manuel tetikleme butonu ekler
+
+jobs:
+  build-and-run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Repoyu Klonla
+        uses: actions/checkout@v4
+
+      - name: Node.js Kurulumu
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Bağımlılıkları Yükle
+        run: npm install
+
+      - name: Kazıma İşlemini Başlat
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+        run: node scrape.js
+
+      - name: Oluşan M3U Dosyasını Repoya Commit Et ve İt
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add output/
+          git commit -m "Auto update: M3U playlist updated [skip ci]" || exit 0
+          git push
