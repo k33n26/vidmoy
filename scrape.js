@@ -1,10 +1,9 @@
 const axios = require('axios');
 const fs = require('fs');
-const cheerio = require('cheerio');
+const puppeteer = require('puppeteer');
 
-// GitHub Secret üzerinden veya doğrudan buraya TMDB API anahtarınızı tanımlayın
 const API_KEY = process.env.TMDB_API_KEY || '5a98ac2ab1eeba8124c3f6a10f4f13ab';
-const ACTOR_IMDB_URL = 'https://www.imdb.com/name/nm0758656/'; // Örn: Pedro Pascal
+const ACTOR_IMDB_URL = 'https://www.imdb.com/name/nm0200637/'; // Örn: İlyas Salman
 
 function extractPersonId(input) {
     const match = input.match(/nm\d+/);
@@ -44,34 +43,57 @@ async function getMovieImdbId(tmdbId) {
     }
 }
 
-async function getRealVideoLink(imdbId) {
+// Puppeteer ile Ağ Trafiğini Dinleme (Network Interception)
+async function getRealVideoLink(browser, imdbId) {
     const vsUrl = `https://vidmody.com/vs/${imdbId}`;
+    let page = null;
+    let videoLink = null;
+
     try {
-        console.log(`  🔍 ${imdbId} için Vidmody sorgulanıyor...`);
-        const response = await axios.get(vsUrl, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-            timeout: 10000
+        console.log(`  🔍 ${imdbId} için Vidmody taranıyor (Puppeteer)...`);
+        page = await browser.newPage();
+
+        // Gereksiz resim ve font yüklemelerini engelleyerek hızı artır
+        await page.setRequestInterception(true);
+        page.on('request', (req) => {
+            const resourceType = req.resourceType();
+            if (['image', 'stylesheet', 'font'].includes(resourceType)) {
+                req.abort();
+            } else {
+                req.continue();
+            }
         });
 
-        const $ = cheerio.load(response.data);
-        let videoLink = null;
-
-        const scripts = $('script').get();
-        for (const script of scripts) {
-            const content = $(script).html();
-            if (content) {
-                const matches = content.match(/https?:\/\/[^\s"']+\.m3u8[^\s"']*/g);
-                if (matches && matches.length > 0) {
-                    videoLink = matches[0];
-                    break;
+        // Ağ isteklerini dinle ve .m3u8 linkini yakala
+        const m3u8Promise = new Promise((resolve) => {
+            page.on('request', (request) => {
+                const url = request.url();
+                if (url.includes('.m3u8')) {
+                    resolve(url);
                 }
-            }
+            });
+
+            // 12 saniye içinde bulamazsa zaman aşımına uğrat
+            setTimeout(() => resolve(null), 12000);
+        });
+
+        // Sayfayı ziyaret et
+        await page.goto(vsUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+
+        // Yakalanan .m3u8 linkini bekle
+        videoLink = await m3u8Promise;
+
+        if (videoLink) {
+            console.log(`  📹 .m3u8 Yakalandı: ${videoLink.substring(0, 70)}...`);
         }
 
-        return videoLink;
-    } catch {
-        return null;
+    } catch (error) {
+        // Hata durumunda sessizce devam et
+    } finally {
+        if (page) await page.close();
     }
+
+    return videoLink;
 }
 
 async function main() {
@@ -82,7 +104,19 @@ async function main() {
     }
 
     const { name, movies } = await getActorMovies(personId);
-    console.log(`📊 Toplam ${movies.length} içerik bulundu. Linkler taranıyor...\n`);
+    console.log(`📊 Toplam ${movies.length} içerik bulundu. Puppeteer başlatılıyor...\n`);
+
+    // Puppeteer Tarayıcısını Başlat
+    const browser = await puppeteer.launch({
+        headless: "new",
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--disable-gpu'
+        ]
+    });
 
     const results = [];
 
@@ -90,7 +124,7 @@ async function main() {
         const imdbFilmId = await getMovieImdbId(movie.id);
         if (!imdbFilmId) continue;
 
-        const videoLink = await getRealVideoLink(imdbFilmId);
+        const videoLink = await getRealVideoLink(browser, imdbFilmId);
         if (videoLink) {
             console.log(`  ✅ BULUNDU: ${movie.title} (${movie.release_date?.split('-')[0] || 'Bilinmiyor'})`);
             results.push({
@@ -100,8 +134,9 @@ async function main() {
                 link: videoLink
             });
         }
-        await new Promise(r => setTimeout(r, 100)); // İstekler arası kısa bekleme
     }
+
+    await browser.close();
 
     if (!fs.existsSync('output')) {
         fs.mkdirSync('output');
