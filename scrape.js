@@ -1,7 +1,11 @@
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
-const puppeteer = require('puppeteer');
+
+// Puppeteer Stealth (Bot Gizleme) Modülü
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+puppeteer.use(StealthPlugin());
 
 const API_KEY = process.env.TMDB_API_KEY || '5a98ac2ab1eeba8124c3f6a10f4f13ab';
 const TXT_FILE_PATH = path.join(__dirname, 'actors.txt');
@@ -65,7 +69,7 @@ async function getMovieImdbId(tmdbId) {
     }
 }
 
-// Gelişmiş Puppeteer Dinleyicisi
+// Stealth Destekli Ağ Dinleyici
 async function getRealVideoLink(browser, imdbId) {
     const vsUrl = `https://vidmody.com/vs/${imdbId}`;
     let page = null;
@@ -74,53 +78,42 @@ async function getRealVideoLink(browser, imdbId) {
     try {
         page = await browser.newPage();
 
-        // Gerçek tarayıcı kimliği ayarla
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
-        await page.setViewport({ width: 1280, height: 720 });
+        // 1. Ekran Çözünürlüğü ve User Agent Ayarla
+        await page.setViewport({ width: 1366, height: 768 });
 
-        // Sadece ağır görselleri ve fontları engelle (JS ve CSS serbest bırakıldı)
-        await page.setRequestInterception(true);
-        page.on('request', (req) => {
-            const rt = req.resourceType();
-            if (['image', 'font'].includes(rt)) {
-                req.abort();
-            } else {
-                req.continue();
-            }
-        });
-
-        // İstek trafiğini ve m3u8 uzantılarını dinle
+        // 2. Ağ Paketlerini Dinle
         const m3u8Promise = new Promise((resolve) => {
             page.on('request', (request) => {
                 const url = request.url();
-                if (url.includes('.m3u8') || url.includes('/hls/') || url.includes('master.m3u8')) {
+                // Vidmody m3u8 ve playlist URL kalıpları
+                if (url.includes('.m3u8') || url.includes('/hls/') || url.includes('/playlist/')) {
                     resolve(url);
                 }
             });
 
-            // Yanıtları da kontrol et (redirect durumları için)
-            page.on('response', (response) => {
+            page.on('response', async (response) => {
                 const url = response.url();
                 if (url.includes('.m3u8') || url.includes('/hls/')) {
                     resolve(url);
                 }
             });
 
-            setTimeout(() => resolve(null), 12000);
+            // 15 Saniye Bekleme Süresi
+            setTimeout(() => resolve(null), 15000);
         });
 
-        // Sayfaya git
-        await page.goto(vsUrl, { waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
+        // Sayfaya git ve tamamen yüklenmesini bekle
+        await page.goto(vsUrl, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
 
-        // Sayfa içindeki iframe veya play butonuna tıklamayı dene (oynatıcıyı tetiklemek için)
-        try {
-            const frames = page.frames();
-            for (const frame of frames) {
-                await frame.click('body').catch(() => {});
-            }
-            await page.click('body').catch(() => {});
-        } catch (e) {
-            // Tıklama hatasını yoksay
+        // Oynatıcıyı Tetiklemek için Sayfa Ortasına Tıklama
+        await page.mouse.click(683, 384).catch(() => {});
+        
+        // Iframe varsa onun içine de tıklama yap
+        const frames = page.frames();
+        for (const frame of frames) {
+            try {
+                await frame.click('body');
+            } catch (e) {}
         }
 
         videoLink = await m3u8Promise;
@@ -143,15 +136,15 @@ async function main() {
 
     console.log(`📋 Toplam ${actors.length} kategori/oyuncu taranacak.\n`);
 
+    // Puppeteer'ı Stealth Modda Başlat
     const browser = await puppeteer.launch({
         headless: "new",
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--disable-gpu',
-            '--window-size=1280,720'
+            '--disable-blink-features=AutomationControlled',
+            '--window-size=1366,768'
         ]
     });
 
@@ -188,7 +181,7 @@ async function main() {
                 console.log(`❌ Bulunamadı`);
             }
         }
-        console.log(`📊 [${actor.groupName}] için ${actorFoundCount} video linki eklendi.`);
+        console.log(`📊 [${actor.groupName}] için ${actorFoundCount} video linki eklendi.\n`);
     }
 
     await browser.close();
