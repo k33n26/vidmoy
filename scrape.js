@@ -6,13 +6,11 @@ const puppeteer = require('puppeteer');
 const API_KEY = process.env.TMDB_API_KEY || '5a98ac2ab1eeba8124c3f6a10f4f13ab';
 const TXT_FILE_PATH = path.join(__dirname, 'actors.txt');
 
-// IMDb ID çıkarma
 function extractPersonId(input) {
     const match = input.match(/nm\d+/);
     return match ? match[0] : null;
 }
 
-// actors.txt dosyasını okuma ve ayrıştırma
 function readActorsList() {
     if (!fs.existsSync(TXT_FILE_PATH)) {
         console.error("❌ actors.txt dosyası bulunamadı!");
@@ -37,7 +35,6 @@ function readActorsList() {
     return list;
 }
 
-// TMDB üzerinden oyuncunun filmlerini çekme
 async function getActorMovies(imdbPersonId) {
     try {
         const findUrl = `https://api.themoviedb.org/3/find/${imdbPersonId}?api_key=${API_KEY}&external_source=imdb_id`;
@@ -58,7 +55,6 @@ async function getActorMovies(imdbPersonId) {
     }
 }
 
-// TMDB ID -> IMDb Film ID
 async function getMovieImdbId(tmdbId) {
     try {
         const url = `https://api.themoviedb.org/3/movie/${tmdbId}/external_ids?api_key=${API_KEY}`;
@@ -69,7 +65,7 @@ async function getMovieImdbId(tmdbId) {
     }
 }
 
-// Puppeteer ile Vidmody ağ trafiğinden .m3u8 yakalama
+// Gelişmiş Puppeteer Dinleyicisi
 async function getRealVideoLink(browser, imdbId) {
     const vsUrl = `https://vidmody.com/vs/${imdbId}`;
     let page = null;
@@ -78,33 +74,59 @@ async function getRealVideoLink(browser, imdbId) {
     try {
         page = await browser.newPage();
 
-        // Resim/stil engelleme ile hızlandırma
+        // Gerçek tarayıcı kimliği ayarla
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+        await page.setViewport({ width: 1280, height: 720 });
+
+        // Sadece ağır görselleri ve fontları engelle (JS ve CSS serbest bırakıldı)
         await page.setRequestInterception(true);
         page.on('request', (req) => {
-            if (['image', 'stylesheet', 'font'].includes(req.resourceType())) {
+            const rt = req.resourceType();
+            if (['image', 'font'].includes(rt)) {
                 req.abort();
             } else {
                 req.continue();
             }
         });
 
-        // Ağ paketlerini dinle
+        // İstek trafiğini ve m3u8 uzantılarını dinle
         const m3u8Promise = new Promise((resolve) => {
             page.on('request', (request) => {
                 const url = request.url();
-                if (url.includes('.m3u8')) {
+                if (url.includes('.m3u8') || url.includes('/hls/') || url.includes('master.m3u8')) {
                     resolve(url);
                 }
             });
 
-            setTimeout(() => resolve(null), 10000);
+            // Yanıtları da kontrol et (redirect durumları için)
+            page.on('response', (response) => {
+                const url = response.url();
+                if (url.includes('.m3u8') || url.includes('/hls/')) {
+                    resolve(url);
+                }
+            });
+
+            setTimeout(() => resolve(null), 12000);
         });
 
-        await page.goto(vsUrl, { waitUntil: 'domcontentloaded', timeout: 12000 }).catch(() => {});
+        // Sayfaya git
+        await page.goto(vsUrl, { waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
+
+        // Sayfa içindeki iframe veya play butonuna tıklamayı dene (oynatıcıyı tetiklemek için)
+        try {
+            const frames = page.frames();
+            for (const frame of frames) {
+                await frame.click('body').catch(() => {});
+            }
+            await page.click('body').catch(() => {});
+        } catch (e) {
+            // Tıklama hatasını yoksay
+        }
+
         videoLink = await m3u8Promise;
 
     } catch (error) {
-        // Hata durumunda geç
+        console.error(`  ❌ Hata (${imdbId}):`, error.message);
     } finally {
         if (page) await page.close();
     }
@@ -128,7 +150,8 @@ async function main() {
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
             '--disable-accelerated-2d-canvas',
-            '--disable-gpu'
+            '--disable-gpu',
+            '--window-size=1280,720'
         ]
     });
 
@@ -148,18 +171,21 @@ async function main() {
             const imdbFilmId = await getMovieImdbId(movie.id);
             if (!imdbFilmId) continue;
 
+            process.stdout.write(`  🔍 ${movie.title} (${imdbFilmId}) kontrol ediliyor... `);
             const videoLink = await getRealVideoLink(browser, imdbFilmId);
+
             if (videoLink) {
                 const year = movie.release_date?.split('-')[0] || 'Bilinmiyor';
                 const poster = movie.poster_path ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` : '';
                 
-                console.log(`  ✅ BULUNDU: ${movie.title} (${year})`);
+                console.log(`\n  ✅ BULUNDU: ${movie.title} -> ${videoLink.substring(0, 50)}...`);
 
-                // IPTV Player (Televizo vb.) uyumlu group-title etiketi eklendi
                 masterPlaylistContent += `#EXTINF:-1 tvg-logo="${poster}" group-title="${actor.groupName}", ${movie.title} (${year})\n${videoLink}\n\n`;
                 
                 actorFoundCount++;
                 totalFoundCount++;
+            } else {
+                console.log(`❌ Bulunamadı`);
             }
         }
         console.log(`📊 [${actor.groupName}] için ${actorFoundCount} video linki eklendi.`);
@@ -167,13 +193,11 @@ async function main() {
 
     await browser.close();
 
-    // Output klasörünü kontrol et
     if (!fs.existsSync('output')) {
         fs.mkdirSync('output');
     }
 
     if (totalFoundCount > 0) {
-        // Tek ve derlenmiş kategorili M3U dosyasını yaz
         const outputPath = 'output/playlist.m3u';
         fs.writeFileSync(outputPath, masterPlaylistContent);
         console.log(`\n🎉 BÜTÜN İŞLEMLER TAMAMLANDI!`);
