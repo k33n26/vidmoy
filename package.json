@@ -1,13 +1,15 @@
 {
   "name": "imdb-vidmody-scraper",
   "version": "1.0.0",
-  "description": "Puppeteer ile Vidmody ağ trafiğinden m3u8 yakalayan scraper",
+  "description": "Puppeteer Stealth ile Vidmody m3u8 kazıyıcı",
   "main": "scrape.js",
   "scripts": {
     "start": "node scrape.js"
   },
   "dependencies": {
     "axios": "^1.6.8",
-    "puppeteer": "^22.6.0"
+    "puppeteer": "^22.6.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
   }
 }
