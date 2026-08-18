@@ -1,9 +1,9 @@
-name: IMDb Vidmody Auto Scraper (Puppeteer)
+name: IMDb Vidmody Multi-Category Scraper
 
 on:
   schedule:
-    - cron: '0 0 * * *'
-  workflow_dispatch:
+    - cron: '0 0 * * *' # Her gece 00:00'da çalışır
+  workflow_dispatch:      # Manuel tetikleme butonu
 
 jobs:
   build-and-run:
@@ -24,15 +24,15 @@ jobs:
       - name: Output Klasörünü Oluştur
         run: mkdir -p output
 
-      - name: Kazıma İşlemini Başlat (Puppeteer)
+      - name: Kazıma İşlemini Başlat (Puppeteer + actors.txt)
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
         run: node scrape.js
 
-      - name: Oluşan M3U Dosyasını Repoya Commit Et ve İt
+      - name: M3U Dosyasını Repoya Kaydet ve İt
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add output/
-          git commit -m "Auto update: M3U playlist updated via Puppeteer [skip ci]" || exit 0
+          git commit -m "Auto update: Multi-category playlist updated [skip ci]" || exit 0
           git push
